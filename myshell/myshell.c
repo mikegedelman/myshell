@@ -10,12 +10,13 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <termios.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
 #include <readline/readline.h>
 
-#define myshell_pipe(x,y) _myshell_pipe(x,y,-1)
+#define myshell_pipe(x,y,z) _myshell_pipe(x,y,z,-1)
 
 /* remember the pid of process in the foreground so we can kill it if 
  * necessary */
@@ -38,15 +39,15 @@ void myshell_exec(char *args[]) {
    if (execvp(args[0], args) < 0) {
       switch (errno) {
          case ENOENT: {
-                         printf("%s: command not found\n", args[0]);
+                         dprintf(2, "%s: command not found\n", args[0]);
                          break;
                       }
          case EACCES: {
-                         printf("%s: permission denied\n", args[0]);
+                         dprintf(2, "%s: permission denied\n", args[0]);
                          break;
                       }
          default: {
-                     printf("%s: unknown error\n", args[0], errno);
+                     dprintf(2, "%s: unknown error\n", args[0], errno);
                      break;
                   }
       }
@@ -57,23 +58,25 @@ void myshell_exec(char *args[]) {
 void print_file_err(char *path) {
    switch(errno) {
       case EACCES: {
-         printf("myshell: %s: permission denied\n", path);
+         dprintf(2, "myshell: %s: permission denied\n", path);
          break;
       }
       case EISDIR: {
-         printf("myshell: %s is a directory\n", path);
+         dprintf(2, "myshell: %s is a directory\n", path);
          break;
       }
       default: {
-         printf("myshell: %s: an error occurred opening this file\n", path);
+         dprintf(2, "myshell: %s: an error occurred opening this file\n", path);
          break;
       }
    }
 }
 
 /*
- * handles '<' and '>' operators existing in argument list args
- * sets up the file descriptors necessary so should be used after fork
+ * handles '<' and '>' operators existing in argument list args,
+ * including '&>', '1>', '2>'
+ * 
+ * sets up the file descriptors necessary - should be used *after* fork
  * returns 1 if it actually redirected anything
  */
 int myshell_redirects(char *args[]) {
@@ -84,12 +87,11 @@ int myshell_redirects(char *args[]) {
       if (args[i][length-1] == '>' || args[i][length-1] == '<') {
 
          if (args[i+1] == NULL) {
-            printf("myshell: error: no filename specified after '%c'\n", 
+            dprintf(2, "myshell: error: no filename specified after '%c'\n", 
                   args[i][length-1]);
             exit(-1);
          }
 
-         /* dup2 the new fd onto the appropriate fd in {0,1,2} */
          if (args[i][length-1] == '>') {
 
             /* open the file for write, create or append */
@@ -118,7 +120,7 @@ int myshell_redirects(char *args[]) {
                     break;
 
                  default:
-                    printf("myshell: invalid specifier: %s\n", args[i]);
+                    dprintf(2, "myshell: invalid specifier: %s\n", args[i]);
                     exit(-1);
               }
          }
@@ -159,7 +161,7 @@ void myshell_collapse(char *new_args[], char *old_args[]) {
 }
 
 
-void _myshell_pipe(char* args1[], char* args2[], int fd_read) {
+void _myshell_pipe(char* args1[], char* args2[], int bg_flag, int fd_read) {
    int i, more_pipes_flag = 0;
    int fd[2];
    char* args3[sizeof_array(args1)];
@@ -189,7 +191,7 @@ void _myshell_pipe(char* args1[], char* args2[], int fd_read) {
    int status;
 
    if (pid < 0 ) {
-      printf("mysh: pipe: an error occurred\n");
+      dprintf(2, "mysh: pipe: an error occurred\n");
       return;
    }
    else if (pid == 0) { /* child */
@@ -199,20 +201,27 @@ void _myshell_pipe(char* args1[], char* args2[], int fd_read) {
       }
       if (fd_read > 0)
          dup2(fd_read, 0);
-
-      myshell_exec(args1);
+   
+      if (myshell_redirects(args1)) {
+         char *new_args[sizeof_array(args1)];
+         myshell_collapse(new_args, args1);
+         myshell_exec(new_args);
+      }
+      else 
+         myshell_exec(args1);
    }
    else { /* parent */
-      fg_proc = pid;
-
       if (more_pipes_flag)
          close(fd[1]);
-
-      wpid = waitpid(pid, &status, 0);
-      fg_proc = -1;
       
+      if (!bg_flag) {
+         wpid = waitpid(pid, &status, 0);
+         fg_proc = wpid;
+      }
+
       if (more_pipes_flag)
-         _myshell_pipe(args2, args3, fd[0]);
+         _myshell_pipe(args2, args3, bg_flag, fd[0]);
+
    }
    
 }
@@ -225,7 +234,7 @@ void myshell_cmd(char* args[], int bg) {
    cpid = fork();
 
    if (cpid < 0) {
-      printf("myshell: an error occured\n");
+      dprintf(2, "myshell: an error occured\n");
       return;
    }
    else if (cpid == 0) { /* child */
@@ -256,8 +265,10 @@ void myshell_cmd(char* args[], int bg) {
 void parse_cmd(char *command) {
    int i;
 
-   if (command == NULL)
-      return;
+   if (command == NULL) {
+      printf("\n");
+      exit(0);
+   }
 
    if (command[0] == '\0')
       return;
@@ -302,15 +313,6 @@ void parse_cmd(char *command) {
    }
 
 
-   if ((pipe_flag && redir_flag)) {
-      printf("myshell: error: '|' operator incompatible with '>' or '<'\n");
-      return;
-   }
-   if ((pipe_flag && bg_flag)) {
-      printf("myshell: error: '|' operator incompatible with '&'\n");
-      return;
-   }
-
    char *args[50]; /* support up to 50 args */
    int argindex;
    args[0] = strtok(command, " ");
@@ -334,7 +336,7 @@ void parse_cmd(char *command) {
                args2[args2_ind++] = args[j];
 
             args2[args2_ind] = NULL;
-            myshell_pipe(args, args2);
+            myshell_pipe(args, args2, bg_flag);
          }
       }
    }
@@ -354,7 +356,13 @@ static void handle_sigint(int sig, siginfo_t *siginfo, void *context) {
       kill(fg_proc, SIGINT);
 }
 
+int quit_mysh(int a, int b) {
+   exit(0);
+}
+
+
 int main() {
+
    /* set up signals */
    struct sigaction child_act;
    memset(&child_act,'\0', sizeof(child_act));
@@ -369,7 +377,6 @@ int main() {
       printf("sigaction error\n");
       exit(-1);
    }
-
    if (sigaction(SIGINT, &int_act, NULL) < 0) {
       printf("sigaction error\n");
       exit(-1);
