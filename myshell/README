@@ -1,2 +1,15 @@
+myshell - a very small/simple linux shell that leverages GNU readline
 
-myshell
+Supports the following operators:
+   '>'  redirect stdout to file
+   '2>' redirect stderr to file
+   '&>' redirect stdout and stderr to file
+   '<'  redirect stdin to process
+   '|'  pipe output from first process to second; can be used multiple times
+   '&'  should be used only at end of command - backgrounds the command
+
+Notes:
+   Ctrl-D or type 'exit' to exit 
+   Ctrl-C kills foreground process
+
+Compile simply by doing 'make' in this folder.
