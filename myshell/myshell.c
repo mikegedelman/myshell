@@ -78,6 +78,10 @@ void print_file_err(char *path) {
  * 
  * sets up the file descriptors necessary - should be used *after* fork
  * returns 1 if it actually redirected anything
+ *
+ * puts -1 (cast to void*) in place of the '>' or '>' and the token after it
+ * to be removed later; this way we don't actually pass the redirect to the
+ * command.
  */
 int myshell_redirects(char *args[]) {
    int i;
@@ -148,7 +152,9 @@ int myshell_redirects(char *args[]) {
    return redir_flag;
 }
 
-
+/*
+ * should be called after myshell_redirects, removes tokens that are -1
+ */
 void myshell_collapse(char *new_args[], char *old_args[]) {
    int i;
    int new_args_ind=0;
@@ -160,7 +166,11 @@ void myshell_collapse(char *new_args[], char *old_args[]) {
    new_args[new_args_ind] = NULL;
 }
 
-
+/*
+ * supports multiple pipes; calls itself recursively
+ * should be called initially with fd_read = -1; later this becomes the 
+ * fd for the next process to read from. see the myshell_pipe macro definition.
+ */
 void _myshell_pipe(char* args1[], char* args2[], int bg_flag, int fd_read) {
    int i, more_pipes_flag = 0;
    int fd[2];
@@ -221,9 +231,7 @@ void _myshell_pipe(char* args1[], char* args2[], int bg_flag, int fd_read) {
 
       if (more_pipes_flag)
          _myshell_pipe(args2, args3, bg_flag, fd[0]);
-
    }
-   
 }
 
 /* fork a child and then call myshell_exec */
@@ -246,8 +254,6 @@ void myshell_cmd(char* args[], int bg) {
       }
       else 
          myshell_exec(args);
-      
-
    }
    else { /* parent */
       if (!bg) {
@@ -258,10 +264,10 @@ void myshell_cmd(char* args[], int bg) {
          fflush(stdout);
       }
    }
-
 }
 
-
+/*
+ * verify the command's validity; tokenize; find out if it uses pipes */
 void parse_cmd(char *command) {
    int i;
 
